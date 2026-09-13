@@ -713,7 +713,15 @@ def _normalize_name(value: str) -> str:
     return re.sub(r"[\s\W_]+", "", value.strip().lower())
 
 
+def _shanghai_timezone():
+    try:
+        return ZoneInfo("Asia/Shanghai")
+    except Exception:
+        return timezone(timedelta(hours=8))
+
+
 def _resolve_deadline(deadline: dict[str, Any], received_at: str | None) -> tuple[str | None, str | None, str | None, str]:
+    local_timezone = _shanghai_timezone()
     if deadline.get("deadline_type") == "relative" and received_at:
         amount = deadline.get("relative_amount")
         unit = str(deadline.get("relative_unit") or "").lower()
@@ -734,7 +742,7 @@ def _resolve_deadline(deadline: dict[str, Any], received_at: str | None) -> tupl
             if base.tzinfo is None:
                 base = base.replace(tzinfo=timezone.utc)
             due = base + timedelta(**{keyword: amount_value})
-            local = due.astimezone(ZoneInfo("Asia/Shanghai"))
+            local = due.astimezone(local_timezone)
             return due.astimezone(timezone.utc).isoformat(), local.date().isoformat(), local.strftime("%H:%M"), "datetime"
         except Exception:
             return None, None, None, "datetime"
@@ -743,7 +751,7 @@ def _resolve_deadline(deadline: dict[str, Any], received_at: str | None) -> tupl
     if due_date and due_time:
         try:
             local_due = datetime.strptime(f"{due_date} {due_time}", "%Y-%m-%d %H:%M").replace(
-                tzinfo=ZoneInfo("Asia/Shanghai")
+                tzinfo=local_timezone
             )
             return local_due.astimezone(timezone.utc).isoformat(), due_date, due_time, "datetime"
         except Exception:
