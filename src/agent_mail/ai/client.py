@@ -1,4 +1,4 @@
-"""Minimal OpenAI-compatible chat client used for DeepSeek and compatible APIs."""
+"""Minimal OpenAI-compatible chat client for multiple model providers."""
 
 from __future__ import annotations
 
@@ -58,16 +58,19 @@ class OpenAICompatibleClient:
 
         try:
             data = json.loads(body)
-            models = data.get("data")
+            models = data.get("data") or data.get("models")
             if not isinstance(models, list):
-                raise ValueError("missing data")
+                raise ValueError("missing models")
         except (json.JSONDecodeError, ValueError) as exc:
             raise LLMClientError("模型列表响应不是有效的 OpenAI 兼容格式。") from exc
 
         model_ids = []
         for item in models:
-            if isinstance(item, dict) and isinstance(item.get("id"), str):
-                model_ids.append(item["id"])
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id") or item.get("name")
+            if isinstance(model_id, str) and model_id.strip():
+                model_ids.append(model_id.strip())
         return sorted(set(model_ids))
 
     def chat_json(self, system_prompt: str, user_prompt: str, json_mode: bool = True) -> dict[str, Any]:
@@ -83,31 +86,15 @@ class OpenAICompatibleClient:
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
-        request = urllib.request.Request(
-            self._endpoint(),
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            method="POST",
-        )
 
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                response_body = response.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:
-            try:
-                detail = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                detail = ""
-            detail = detail.replace(self.api_key, "[redacted]")[:500]
-            raise LLMClientError(f"AI API HTTP {exc.code}: {detail or exc.reason}") from exc
-        except urllib.error.URLError as exc:
-            raise LLMClientError(f"AI API 网络错误：{exc.reason}") from exc
-        except TimeoutError as exc:
-            raise LLMClientError("AI API 请求超时。") from exc
+            response_body = self._post_chat(payload)
+        except LLMClientError as exc:
+            if not json_mode or not _should_retry_without_json_mode(str(exc)):
+                raise
+            fallback_payload = dict(payload)
+            fallback_payload.pop("response_format", None)
+            response_body = self._post_chat(fallback_payload)
 
         try:
             data = json.loads(response_body)
@@ -131,6 +118,33 @@ class OpenAICompatibleClient:
             raise LLMClientError("模型输出必须是 JSON 对象。")
         return result
 
+    def _post_chat(self, payload: dict[str, Any]) -> str:
+        request = urllib.request.Request(
+            self._endpoint(),
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                detail = ""
+            detail = detail.replace(self.api_key, "[redacted]")[:500]
+            raise LLMClientError(f"AI API HTTP {exc.code}: {detail or exc.reason}") from exc
+        except urllib.error.URLError as exc:
+            raise LLMClientError(f"AI API 网络错误：{exc.reason}") from exc
+        except TimeoutError as exc:
+            raise LLMClientError("AI API 请求超时。") from exc
+
 
 def _strip_code_fence(value: str) -> str:
     if value.startswith("```"):
@@ -141,3 +155,11 @@ def _strip_code_fence(value: str) -> str:
             lines = lines[:-1]
         return "\n".join(lines).strip()
     return value
+
+
+
+def _should_retry_without_json_mode(message: str) -> bool:
+    lowered = message.lower()
+    if "response_format" in lowered or "json_object" in lowered or "json mode" in lowered:
+        return True
+    return "ai api http 422" in lowered

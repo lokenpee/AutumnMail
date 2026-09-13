@@ -509,11 +509,15 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
 
     def _save_screening_settings(self, payload: dict[str, Any]) -> None:
         config = self._load_screening_config()
+        previous_provider = str(config.get("provider") or "")
         for key in ("enabled", "provider", "base_url", "model", "max_chars", "max_tokens", "timeout", "concurrency"):
             if key in payload:
                 config[key] = payload[key]
         config["provider"] = str(config.get("provider") or "siliconflow")
-        config["base_url"] = str(config.get("base_url") or "https://api.siliconflow.cn/v1").rstrip("/")
+        config["base_url"] = str(config.get("base_url") or "").strip().rstrip("/")
+        if not config["base_url"]:
+            self._json_error("请填写筛选 API Base URL。", HTTPStatus.BAD_REQUEST)
+            return
         config["model"] = str(config.get("model") or "")
         config["max_chars"] = max(100, min(int(config.get("max_chars", 2000)), 20000))
         config["max_tokens"] = max(64, min(int(config.get("max_tokens", 300)), 2048))
@@ -523,6 +527,8 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         api_key = str(payload.get("api_key", "")).strip()
         if api_key:
             save_secret(SCREENING_CREDENTIAL_KEY, config["provider"], api_key)
+        elif previous_provider and previous_provider != config["provider"]:
+            delete_secret(SCREENING_CREDENTIAL_KEY)
         if payload.get("clear_api_key"):
             delete_secret(SCREENING_CREDENTIAL_KEY)
 
@@ -530,7 +536,10 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         self._send_json(self._screening_settings_state())
 
     def _list_screening_models(self, payload: dict[str, Any]) -> None:
-        base_url = str(payload.get("base_url") or "https://api.siliconflow.cn/v1").strip().rstrip("/")
+        base_url = str(payload.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            self._json_error("请填写筛选 API Base URL。", HTTPStatus.BAD_REQUEST)
+            return
         api_key = str(payload.get("api_key", "")).strip()
         if not api_key:
             try:
@@ -779,11 +788,15 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
 
     def _save_ai_settings(self, payload: dict[str, Any]) -> None:
         config = self._load_ai_config()
+        previous_provider = str(config.get("provider") or "")
         for key in ("enabled", "provider", "base_url", "model", "max_chars", "max_tokens", "timeout", "temperature", "concurrency"):
             if key in payload:
                 config[key] = payload[key]
-        config["provider"] = str(config.get("provider") or "siliconflow")
-        config["base_url"] = str(config.get("base_url") or "https://api.siliconflow.cn/v1").rstrip("/")
+        config["provider"] = str(config.get("provider") or "deepseek")
+        config["base_url"] = str(config.get("base_url") or "").strip().rstrip("/")
+        if not config["base_url"]:
+            self._json_error("请填写主模型 API Base URL。", HTTPStatus.BAD_REQUEST)
+            return
         config["model"] = str(config.get("model") or "")
         config["max_chars"] = max(100, min(int(config.get("max_chars", 8000)), 50000))
         config["max_tokens"] = max(128, min(int(config.get("max_tokens", 1500)), 8192))
@@ -794,6 +807,8 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         api_key = str(payload.get("api_key", "")).strip()
         if api_key:
             save_secret(AI_CREDENTIAL_KEY, config["provider"], api_key)
+        elif previous_provider and previous_provider != config["provider"]:
+            delete_secret(AI_CREDENTIAL_KEY)
         if payload.get("clear_api_key"):
             delete_secret(AI_CREDENTIAL_KEY)
 
@@ -1035,7 +1050,7 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
             self._json_error(str(exc), HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         if not api_key:
-            self._json_error("请先保存 DeepSeek API Key。", HTTPStatus.BAD_REQUEST)
+            self._json_error("请先保存主模型 API Key。", HTTPStatus.BAD_REQUEST)
             return
 
         limit = max(1, min(int(payload.get("limit", 3)), 10))
@@ -1112,7 +1127,10 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         )
 
     def _list_ai_models(self, payload: dict[str, Any]) -> None:
-        base_url = str(payload.get("base_url") or "https://api.siliconflow.cn/v1").strip().rstrip("/")
+        base_url = str(payload.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            self._json_error("请填写主模型 API Base URL。", HTTPStatus.BAD_REQUEST)
+            return
         api_key = str(payload.get("api_key", "")).strip()
         if not api_key:
             try:

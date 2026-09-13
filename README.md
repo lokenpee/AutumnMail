@@ -21,8 +21,8 @@
 - Windows
 - Python 3.10+
 - 163 邮箱客户端授权码
-- 可选：硅基流动/OpenAI-compatible 筛选 API
-- 可选：DeepSeek/OpenAI-compatible 主模型 API
+- 筛选 API：支持硅基流动、DeepSeek、OpenAI、Qwen、Kimi、智谱、OpenRouter、Groq、Ollama 等 OpenAI 兼容接口
+- 主模型 API：同样支持任意 OpenAI 兼容接口，可手动填写 Base URL 和模型 ID
 
 ## 启动
 

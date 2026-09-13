@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import io
+import json
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -119,6 +123,64 @@ class AiAnalysisTests(unittest.TestCase):
         )
         self.assertEqual("https://api.deepseek.com/chat/completions", client._endpoint())
         self.assertEqual("https://api.deepseek.com/models", client._models_endpoint())
+
+    def test_arbitrary_openai_compatible_endpoint_derivation(self) -> None:
+        client = OpenAICompatibleClient(
+            api_key="test",
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        self.assertEqual(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            client._endpoint(),
+        )
+        self.assertEqual(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
+            client._models_endpoint(),
+        )
+
+    def test_chat_json_retries_without_response_format(self) -> None:
+        calls = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return json.dumps({"choices": [{"message": {"content": '{"ok": true}'}}]}).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            calls.append(json.loads(request.data.decode("utf-8")))
+            if len(calls) == 1:
+                detail = b'{"error":{"message":"response_format is not supported"}}'
+                raise urllib.error.HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(detail))
+            return FakeResponse()
+
+        client = OpenAICompatibleClient(api_key="test", base_url="https://api.example.com/v1")
+        with patch("agent_mail.ai.client.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = client.chat_json("system", "user")
+
+        self.assertEqual({"ok": True}, result)
+        self.assertEqual(2, len(calls))
+        self.assertIn("response_format", calls[0])
+        self.assertNotIn("response_format", calls[1])
+
+    def test_model_list_accepts_common_compatible_shapes(self) -> None:
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return json.dumps({"models": [{"name": "qwen-plus"}]}).encode("utf-8")
+
+        client = OpenAICompatibleClient(api_key="test", base_url="https://api.example.com/v1")
+        with patch("agent_mail.ai.client.urllib.request.urlopen", return_value=FakeResponse()):
+            self.assertEqual(["qwen-plus"], client.list_models())
 
 
     def test_prefilter_skips_marketing_email(self) -> None:

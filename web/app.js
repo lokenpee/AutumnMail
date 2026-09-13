@@ -6,6 +6,29 @@ const companyMap = new Map(companies.map((company) => [company.id, company]));
 const emailMap = new Map(emails.map((email) => [email.id, email]));
 const completedStorageKey = "agent-mail.completed";
 const dateRangeStorageKey = "agent-mail.dateRange";
+const providerPresets = {
+  deepseek: {label: "DeepSeek", baseUrl: "https://api.deepseek.com"},
+  siliconflow: {label: "硅基流动 SiliconFlow", baseUrl: "https://api.siliconflow.cn/v1"},
+  openai: {label: "OpenAI", baseUrl: "https://api.openai.com/v1"},
+  dashscope: {label: "阿里云百炼 / Qwen", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+  moonshot: {label: "月之暗面 Kimi", baseUrl: "https://api.moonshot.cn/v1"},
+  zhipu: {label: "智谱 BigModel", baseUrl: "https://open.bigmodel.cn/api/paas/v4"},
+  openrouter: {label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1"},
+  groq: {label: "Groq", baseUrl: "https://api.groq.com/openai/v1"},
+  together: {label: "Together AI", baseUrl: "https://api.together.xyz/v1"},
+  xai: {label: "xAI / Grok", baseUrl: "https://api.x.ai/v1"},
+  mistral: {label: "Mistral AI", baseUrl: "https://api.mistral.ai/v1"},
+  ollama: {label: "Ollama 本地", baseUrl: "http://127.0.0.1:11434/v1"},
+  lmstudio: {label: "LM Studio 本地", baseUrl: "http://127.0.0.1:1234/v1"},
+  custom: {label: "自定义 OpenAI 兼容接口", baseUrl: ""},
+};
+
+function renderProviderOptions(selectedProvider) {
+  return Object.entries(providerPresets)
+    .map(([value, preset]) => `<option value="${value}" ${selectedProvider === value ? "selected" : ""}>${escapeHtml(preset.label)}</option>`)
+    .join("");
+}
+
 let pendingMailScrollId = null;
 let pendingMailScrollRestore = false;
 let searchComposing = false;
@@ -1143,8 +1166,12 @@ async function loadScreeningSettings() {
 }
 
 async function fetchScreeningModels() {
-  const baseUrl = document.getElementById("screening-base-url")?.value?.trim() || "https://api.siliconflow.cn/v1";
+  const baseUrl = document.getElementById("screening-base-url")?.value?.trim() || state.screeningState.config.base_url || "";
   const apiKey = document.getElementById("screening-api-key")?.value?.trim() || "";
+  if (!baseUrl) {
+    showToast("请先选择服务商或填写筛选 API Base URL。", "error");
+    return;
+  }
   state.screeningState.fetchingModels = true;
   state.screeningState.error = null;
   render();
@@ -1173,7 +1200,7 @@ async function submitScreeningForm(event) {
   const payload = {
     enabled: Boolean(document.getElementById("screening-enabled")?.checked),
     provider: document.getElementById("screening-provider")?.value || "siliconflow",
-    base_url: document.getElementById("screening-base-url")?.value?.trim() || "https://api.siliconflow.cn/v1",
+    base_url: document.getElementById("screening-base-url")?.value?.trim() || state.screeningState.config.base_url || "",
     model: document.getElementById("screening-model")?.value || "",
     api_key: document.getElementById("screening-api-key")?.value?.trim() || "",
     max_chars: Number(document.getElementById("screening-max-chars")?.value || 2000),
@@ -1191,6 +1218,7 @@ async function submitScreeningForm(event) {
     });
     state.screeningState.saving = false;
     state.screeningState.dirty = false;
+    state.screeningState.providerChanged = false;
     showToast("筛选 API 配置已保存");
     await loadScreeningSettings();
   } catch (error) {
@@ -1209,7 +1237,7 @@ function renderScreeningSettingsCard() {
       <div class="settings-card-heading">
         <div>
           <h2>筛选 API</h2>
-          <p>先用小模型判断邮件是否与秋招相关，只有筛选通过的邮件才会进入主模型，减少 Token 浪费。</p>
+          <p>用低成本的 OpenAI 兼容模型判断邮件是否与秋招相关；支持云端服务或本地模型。</p>
         </div>
         ${screening.apiKeyConfigured ? pill("筛选 Key 已配置", "green") : pill("未配置筛选 Key", "muted")}
       </div>
@@ -1222,18 +1250,16 @@ function renderScreeningSettingsCard() {
           <label class="form-field">
             <span>服务商</span>
             <select class="select" id="screening-provider">
-              <option value="siliconflow" ${config.provider === "siliconflow" ? "selected" : ""}>硅基流动</option>
-              <option value="custom" ${config.provider === "custom" ? "selected" : ""}>自定义兼容接口</option>
+              ${renderProviderOptions(config.provider)}
             </select>
           </label>
           <label class="form-field">
             <span>筛选模型</span>
             <div class="inline-control">
-              <select class="select" id="screening-model">
-                ${(screening.models.length ? screening.models : [config.model || ""]).map((model) => `
-                  <option value="${escapeHtml(model)}" ${config.model === model ? "selected" : ""}>${escapeHtml(model)}</option>
-                `).join("")}
-              </select>
+              <input class="input" id="screening-model" list="screening-model-options" value="${escapeHtml(config.model || "")}" placeholder="获取模型或手动输入模型 ID" />
+              <datalist id="screening-model-options">
+                ${(screening.models || []).map((model) => `<option value="${escapeHtml(model)}"></option>`).join("")}
+              </datalist>
               <button class="button" type="button" data-action="fetch-screening-models" ${screening.fetchingModels ? "disabled" : ""}>
                 ${screening.fetchingModels ? "获取中..." : "获取模型"}
               </button>
@@ -1242,7 +1268,7 @@ function renderScreeningSettingsCard() {
         </div>
         <label class="form-field">
           <span>筛选 API Base URL</span>
-          <input class="input" id="screening-base-url" type="url" value="${escapeHtml(config.base_url || "https://api.siliconflow.cn/v1")}" />
+          <input class="input" id="screening-base-url" type="url" value="${escapeHtml(config.base_url || "")}" placeholder="https://your-provider.example/v1" />
         </label>
         <label class="form-field">
           <span>筛选 API Key</span>
@@ -1340,8 +1366,12 @@ async function loadAiSettings() {
 }
 
 async function fetchAiModels() {
-  const baseUrl = document.getElementById("ai-base-url")?.value?.trim() || "https://api.deepseek.com";
+  const baseUrl = document.getElementById("ai-base-url")?.value?.trim() || state.aiState.config.base_url || "";
   const apiKey = document.getElementById("ai-api-key")?.value?.trim() || "";
+  if (!baseUrl) {
+    showToast("请先选择服务商或填写主模型 API Base URL。", "error");
+    return;
+  }
   state.aiState.fetchingModels = true;
   state.aiState.error = null;
   render();
@@ -1490,6 +1520,13 @@ async function testApiConnection(kind) {
   if (kind === "screening") captureScreeningDraft();
   else captureAiDraft();
   const target = kind === "screening" ? state.screeningState : state.aiState;
+  if (target.providerChanged && !target.draftApiKey) {
+    target.connectionStatus = "error";
+    target.connectionError = "更换服务商后，请输入该服务商的 API Key 并先保存配置。";
+    render();
+    showToast(target.connectionError, "error");
+    return;
+  }
   target.testing = true;
   target.connectionStatus = null;
   target.connectionError = null;
@@ -1696,8 +1733,8 @@ async function submitAiForm(event) {
   const payload = {
     enabled: config.enabled,
     provider: document.getElementById("ai-provider")?.value || "deepseek",
-    base_url: document.getElementById("ai-base-url")?.value?.trim() || "https://api.deepseek.com",
-    model: document.getElementById("ai-model")?.value?.trim() || "deepseek-flash",
+    base_url: document.getElementById("ai-base-url")?.value?.trim() || state.aiState.config.base_url || "",
+    model: document.getElementById("ai-model")?.value?.trim() || state.aiState.config.model || "",
     api_key: document.getElementById("ai-api-key")?.value?.trim() || "",
     max_chars: Number(document.getElementById("ai-max-chars")?.value || 8000),
     max_tokens: Number(document.getElementById("ai-max-tokens")?.value || 1500),
@@ -1715,6 +1752,7 @@ async function submitAiForm(event) {
     });
     state.aiState.saving = false;
     state.aiState.dirty = false;
+    state.aiState.providerChanged = false;
     showToast("AI 配置已保存");
     await loadAiSettings();
   } catch (error) {
@@ -1755,7 +1793,7 @@ function renderAiSettingsCard() {
       <div class="settings-card-heading">
         <div>
           <h2>AI 分析</h2>
-          <p>当前默认使用 DeepSeek OpenAI 兼容接口。API Key 只保存在 Windows 凭据管理器。</p>
+          <p>支持 OpenAI、DeepSeek、Qwen、Kimi、智谱、OpenRouter、Groq、Ollama 等 OpenAI 兼容接口。API Key 只保存在 Windows 凭据管理器。</p>
         </div>
         ${ai.apiKeyConfigured ? pill("API Key 已配置", "green") : pill("未配置 API Key", "muted")}
       </div>
@@ -1764,18 +1802,16 @@ function renderAiSettingsCard() {
           <label class="form-field">
             <span>服务商</span>
             <select class="select" id="ai-provider">
-              <option value="deepseek" ${config.provider === "deepseek" ? "selected" : ""}>DeepSeek</option>
-              <option value="custom" ${config.provider === "custom" ? "selected" : ""}>自定义兼容接口</option>
+              ${renderProviderOptions(config.provider)}
             </select>
           </label>
           <label class="form-field">
             <span>模型</span>
             <div class="inline-control">
-              <select class="select" id="ai-model">
-                ${(ai.models.length ? ai.models : [config.model || "deepseek-flash"]).map((model) => `
-                  <option value="${escapeHtml(model)}" ${config.model === model ? "selected" : ""}>${escapeHtml(model)}</option>
-                `).join("")}
-              </select>
+              <input class="input" id="ai-model" list="ai-model-options" value="${escapeHtml(config.model || "")}" placeholder="获取模型或手动输入模型 ID" />
+              <datalist id="ai-model-options">
+                ${(ai.models || []).map((model) => `<option value="${escapeHtml(model)}"></option>`).join("")}
+              </datalist>
               <button class="button" type="button" data-action="fetch-models" ${ai.fetchingModels ? "disabled" : ""}>
                 ${ai.fetchingModels ? "获取中..." : "获取模型"}
               </button>
@@ -1784,11 +1820,11 @@ function renderAiSettingsCard() {
         </div>
         <label class="form-field">
           <span>API Base URL</span>
-          <input class="input" id="ai-base-url" type="url" value="${escapeHtml(config.base_url || "https://api.deepseek.com")}" />
+          <input class="input" id="ai-base-url" type="url" value="${escapeHtml(config.base_url || "")}" placeholder="https://your-provider.example/v1" />
         </label>
         <label class="form-field">
           <span>API Key</span>
-          <input class="input" id="ai-api-key" type="password" value="${escapeHtml(ai.draftApiKey || "")}" placeholder="${ai.apiKeyConfigured ? "••••••••••••••••  已保存，输入新 Key 可替换" : "输入 DeepSeek API Key"}" autocomplete="new-password" />
+          <input class="input" id="ai-api-key" type="password" value="${escapeHtml(ai.draftApiKey || "")}" placeholder="${ai.apiKeyConfigured ? "••••••••••••••••  已保存，输入新 Key 可替换" : "输入主模型 API Key"}" autocomplete="new-password" />
         </label>
         <div class="form-grid-4">
           <label class="form-field">
@@ -2589,7 +2625,28 @@ function handleChange(event) {
     showToast("设置已更新");
     return;
   }
-  if (target.id === "ai-provider" || target.id === "ai-model" || target.id === "screening-provider" || target.id === "screening-model") {
+  if (target.id === "ai-provider" || target.id === "screening-provider") {
+    const isAi = target.id.startsWith("ai-");
+    const targetState = isAi ? state.aiState : state.screeningState;
+    const previousProvider = targetState.config.provider;
+    if (isAi) captureAiDraft();
+    else captureScreeningDraft();
+    const preset = providerPresets[target.value];
+    if (preset) {
+      targetState.config.provider = target.value;
+      if (preset.baseUrl) targetState.config.base_url = preset.baseUrl;
+      targetState.models = [];
+      targetState.dirty = true;
+      targetState.providerChanged = previousProvider !== target.value;
+      if (targetState.providerChanged) {
+        targetState.apiKeyConfigured = false;
+        targetState.draftApiKey = "";
+      }
+    }
+    render();
+    return;
+  }
+  if (target.id === "ai-model" || target.id === "screening-model") {
     if (target.id.startsWith("ai-")) captureAiDraft();
     else captureScreeningDraft();
     updateApiButtonState();

@@ -35,7 +35,7 @@ def main() -> int:
 
     root = app_root()
     db_path = args.db or (root / "data" / "agent_mail.db")
-    url = f"http://{args.host}:{args.port}/?v=20260913r#/home"
+    url = f"http://{args.host}:{args.port}/?v=20260913s#/home"
 
     if port_open(args.host, args.port):
         if not args.no_browser:
