@@ -29,6 +29,7 @@ python -m PyInstaller `
 
 Copy-Item -LiteralPath (Join-Path $Root "README.md") -Destination $Dist -Force
 Copy-Item -LiteralPath (Join-Path $Root "SECURITY.md") -Destination $Dist -Force
+Copy-Item -LiteralPath (Join-Path $Root "LICENSE") -Destination $Dist -Force
 @"
 @echo off
 taskkill /IM AgentMail.exe /F
