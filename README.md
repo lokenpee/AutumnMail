@@ -4,6 +4,12 @@
 
 它将 163 邮箱中的求职邮件同步到本机 SQLite，然后进行筛选、结构化提取、公司聚合、DDL 和面试事件管理，并通过本地 Web UI 展示。
 
+## 下载
+
+Windows 免安装便携版：[下载 AgentMail-Windows.zip](https://github.com/lokenpee/AutumnMail/releases/download/v0.1.0/AgentMail-Windows.zip)
+
+也可以打开 [GitHub Releases](https://github.com/lokenpee/AutumnMail/releases)，在 `v0.1.0` 的 Assets 区域下载 `AgentMail-Windows.zip`。
+
 ## 功能
 
 - 通过 163 IMAP 只读同步收件箱邮件
@@ -58,7 +64,7 @@ http://127.0.0.1:8765
 
 ## 免 Python 便携版
 
-GitHub Release 会提供 Windows 便携包：
+GitHub Release 提供 Windows 便携包：
 
 ```text
 AgentMail-Windows.zip
