@@ -6,10 +6,19 @@ import imaplib
 import re
 import ssl
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 if "ID" not in imaplib.Commands:
     imaplib.Commands["ID"] = ("AUTH",)
+
+
+
+def _imap_date(value: date) -> str:
+    month_names = (
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    )
+    return f"{value.day:02d}-{month_names[value.month - 1]}-{value.year}"
 
 
 @dataclass(slots=True)
@@ -149,17 +158,22 @@ class NeteaseImapClient:
             return []
         return [item.decode("ascii") if isinstance(item, bytes) else str(item) for item in data[0].split()]
 
-    def search_since(self, days: int = 30) -> list[str]:
-        month_names = (
-            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-        )
-        since = datetime.now(timezone.utc) - timedelta(days=days)
-        date_value = f"{since.day:02d}-{month_names[since.month - 1]}-{since.year}"
-        status, data = self.connection.uid("SEARCH", None, "SINCE", date_value)
+    def search_range(self, start_date: date | None = None, end_date: date | None = None) -> list[str]:
+        criteria: list[str] = []
+        if start_date:
+            criteria.extend(("SINCE", _imap_date(start_date)))
+        if end_date:
+            criteria.extend(("BEFORE", _imap_date(end_date + timedelta(days=1))))
+        if not criteria:
+            criteria.append("ALL")
+        status, data = self.connection.uid("SEARCH", None, *criteria)
         if status != "OK" or not data or not data[0]:
             return []
         return [item.decode("ascii") if isinstance(item, bytes) else str(item) for item in data[0].split()]
+
+    def search_since(self, days: int = 30) -> list[str]:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        return self.search_range(start_date=since.date())
 
     def fetch_emails(self, uids: list[str], batch_size: int = 30) -> list[FetchedEmail]:
         messages: list[FetchedEmail] = []

@@ -13,7 +13,7 @@ import re
 import ssl
 from contextlib import contextmanager
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -123,6 +123,28 @@ def _safe_ai_error(exc: Exception, api_key: str = "") -> str:
 
 def _normalize_name(value: str) -> str:
     return re.sub(r"[\s\W_]+", "", value.strip().lower())
+
+
+def _parse_sync_bounds(payload: dict[str, Any]) -> tuple[date | None, date | None]:
+    try:
+        start_date = date.fromisoformat(str(payload.get("start_date") or "").strip()) if payload.get("start_date") else None
+        end_date = date.fromisoformat(str(payload.get("end_date") or "").strip()) if payload.get("end_date") else None
+    except ValueError as exc:
+        raise RuntimeError("同步日期必须使用 YYYY-MM-DD 格式。") from exc
+    if start_date and end_date and start_date > end_date:
+        raise RuntimeError("开始日期不能晚于结束日期。")
+    if not start_date and not end_date:
+        days = max(1, int(payload.get("days", 30)))
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days)
+    return start_date, end_date
+
+
+def _parse_sync_limit(payload: dict[str, Any]) -> int | None:
+    raw_limit = payload.get("limit")
+    if raw_limit in (None, ""):
+        return None
+    return max(1, int(raw_limit))
 
 
 class AgentMailServer(ThreadingHTTPServer):
@@ -316,7 +338,7 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         _append_log("success", f"163 邮箱连接成功：{email}")
         self._send_json({"connected": True, "email": email, "folders": folders})
 
-    def _perform_sync(self, days: int, limit: int) -> dict[str, Any]:
+    def _perform_sync(self, start_date: date | None, end_date: date | None, limit: int | None) -> dict[str, Any]:
         account = self._first_account()
         if not account:
             raise RuntimeError("请先连接 163 邮箱。")
@@ -326,23 +348,25 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
             raise RuntimeError(str(exc)) from exc
         if not auth_code:
             raise RuntimeError("本机没有找到授权码，请重新连接邮箱。")
-        _append_log("info", "开始同步 163 邮箱邮件")
+        range_text = f"{start_date or '最早'} 至 {end_date or '今天'}"
+        _append_log("info", f"开始同步 163 邮箱邮件：{range_text}")
         with self._open_db() as connection:
             service = MailSyncService(connection)
             result = service.sync_recent(
                 email=account["email"],
                 auth_code=auth_code,
-                days=days,
                 limit=limit,
+                start_date=start_date,
+                end_date=end_date,
             )
         _append_log("success", f"邮件同步完成：获取 {result.fetched} 封，新增 {result.inserted} 封")
         return asdict(result)
 
     def _run_sync(self, payload: dict[str, Any]) -> None:
-        days = max(1, min(int(payload.get("days", 30)), 3650))
-        limit = max(1, min(int(payload.get("limit", 500)), 5000))
         try:
-            result = self._perform_sync(days, limit)
+            start_date, end_date = _parse_sync_bounds(payload)
+            limit = _parse_sync_limit(payload)
+            result = self._perform_sync(start_date, end_date, limit)
         except Exception as exc:
             self._json_error(str(exc), HTTPStatus.BAD_REQUEST)
             return
@@ -350,8 +374,12 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
 
     def _run_sync_pipeline(self, payload: dict[str, Any]) -> None:
         job_id = str(uuid.uuid4())
-        days = max(1, min(int(payload.get("days", 30)), 3650))
-        limit = max(1, min(int(payload.get("limit", 500)), 5000))
+        try:
+            start_date, end_date = _parse_sync_bounds(payload)
+            limit = _parse_sync_limit(payload)
+        except Exception as exc:
+            self._json_error(str(exc), HTTPStatus.BAD_REQUEST)
+            return
         chunk_size = max(1, min(int(payload.get("chunk_size", 20)), 100))
         self._create_ai_job(job_id, "pipeline")
         _append_log("info", "开始同步并自动处理邮件流水线", job_id)
@@ -359,7 +387,7 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         def worker() -> None:
             try:
                 self._update_ai_job(job_id, stage="syncing", completed=0, total=0)
-                sync_result = self._perform_sync(days, limit)
+                sync_result = self._perform_sync(start_date, end_date, limit)
                 screening_totals = {"screened": 0, "relevant": 0, "irrelevant": 0, "failed": 0}
                 analysis_totals = {"analyzed": 0, "failed": 0}
 

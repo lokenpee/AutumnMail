@@ -6,7 +6,7 @@ import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from agent_mail.mail import NeteaseImapClient, parse_email
@@ -108,9 +108,16 @@ class MailSyncService:
         email: str,
         auth_code: str,
         days: int = 30,
-        limit: int = 500,
+        limit: int | None = None,
         folder: str = "INBOX",
+        start_date: date | None = None,
+        end_date: date | None = None,
     ) -> SyncResult:
+        if start_date is None and end_date is None:
+            start_date = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        if start_date and end_date and start_date > end_date:
+            raise ValueError("开始日期不能晚于结束日期。")
+
         account_id = self.ensure_account(email)
         folder_id = self.ensure_folder(account_id, folder)
         self._mark_folder_syncing(folder_id)
@@ -120,8 +127,9 @@ class MailSyncService:
             client.connect()
             client.select_folder(folder, readonly=True)
             uidvalidity = client.get_uidvalidity(folder)
-            uids = client.search_since(days=days)
-            uids = uids[-limit:]
+            uids = client.search_range(start_date=start_date, end_date=end_date)
+            if limit is not None:
+                uids = uids[-limit:]
             fetched_messages = client.fetch_emails(uids)
 
             inserted = 0

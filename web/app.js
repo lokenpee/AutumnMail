@@ -1,9 +1,11 @@
-import { categoryMeta, companies, emails } from "./data.js";
+import { categoryMeta } from "./data.js";
 
 const root = document.getElementById("app");
 const toastRoot = document.getElementById("toast-root");
-const companyMap = new Map(companies.map((company) => [company.id, company]));
-const emailMap = new Map(emails.map((email) => [email.id, email]));
+const companies = [];
+const emails = [];
+const companyMap = new Map();
+const emailMap = new Map();
 const completedStorageKey = "agent-mail.completed";
 const dateRangeStorageKey = "agent-mail.dateRange";
 const providerPresets = {
@@ -72,7 +74,7 @@ const state = {
   selectedCompany: "all",
   search: "",
   category: "all",
-  selectedMailId: "mail-01",
+  selectedMailId: null,
   mailListScrollTop: 0,
   calendarMonth: currentMonthStart(),
   selectedCalendarDate: currentDateKey(),
@@ -598,6 +600,17 @@ function renderCurrentPage() {
   return renderHomePage();
 }
 
+function getSyncStatusLabel() {
+  const accountState = state.accountState;
+  if (accountState.syncing) {
+    return `正在${pipelineStageLabel(accountState.pipelineStage)}...`;
+  }
+  const folder = (accountState.folders || []).find((item) => item.last_synced_at);
+  if (!folder) return "尚未同步";
+  const timestamp = String(folder.last_synced_at).slice(5, 16).replace("T", " ");
+  return `已同步 ${timestamp}`;
+}
+
 function renderTopbar() {
   const tabs = [
     ["home", "首页"],
@@ -625,7 +638,7 @@ function renderTopbar() {
           .join("")}
       </nav>
       <div class="topbar-actions">
-        <span class="sync-status"><span class="sync-dot"></span>已同步 09:30</span>
+        <span class="sync-status"><span class="sync-dot"></span>${escapeHtml(getSyncStatusLabel())}</span>
       </div>
     </header>
   `;
@@ -2098,17 +2111,21 @@ function renderSettingsPage() {
                   <span class="mail-company">${accountState.syncResult ? accountState.syncResult.fetched : "等待同步"}</span>
                 </div>
                 <div class="form-actions">
+                  <button class="button" data-action="sync-only" ${accountState.syncing ? "disabled" : ""}>
+                    ${accountState.syncing && accountState.syncMode === "sync" ? "正在同步邮件..." : "仅同步邮件"}
+                  </button>
                   <button class="button primary" data-action="sync-now" ${accountState.syncing ? "disabled" : ""}>
-                    ${accountState.syncing
+                    ${accountState.syncing && accountState.syncMode === "pipeline"
                       ? `正在${pipelineStageLabel(accountState.pipelineStage)}${
                           accountState.pipelineTotal
                             ? ` ${accountState.pipelineCompleted}/${accountState.pipelineTotal}`
                             : "..."
                         }`
-                      : "同步并自动处理最近 30 天"}
+                      : "同步并自动处理"}
                   </button>
                   <button class="button" data-action="disconnect-account">断开邮箱</button>
                 </div>
+                <p class="form-hint">同步范围来自首页日期：${state.dateStart} 至 ${state.dateEnd}</p>
                 ${
                   accountState.syncResult
                     ? `<p class="form-hint">最近一次同步：获取 ${accountState.syncResult.fetched} 封，新增 ${accountState.syncResult.inserted} 封，更新 ${accountState.syncResult.updated} 封。</p>`
@@ -2194,7 +2211,7 @@ function renderSettingsPage() {
 
       <article class="settings-card panel">
         <h2>关于</h2>
-        <p>当前版本：Web UI 原型 v0.1。邮箱连接、最近 30 天同步和本地 SQLite 存储已经进入开发。</p>
+        <p>当前版本：Web UI v0.1。邮箱连接、按首页日期范围同步和本地 SQLite 存储已经可用。</p>
       </article>
     </section>
   `;
@@ -2240,17 +2257,29 @@ async function loadAccountState() {
 async function loadMailFromApi() {
   try {
     const data = await apiRequest("/api/emails");
-    if (!Array.isArray(data.emails) || !data.emails.length) {
-      return false;
-    }
-    const mapped = data.emails.map((mail) => ({
+    const source = Array.isArray(data.emails) ? data.emails : [];
+    const mapped = source.map((mail) => ({
       ...mail,
       companyId: mail.companyId || "unassigned",
       unread: false,
     }));
     emails.splice(0, emails.length, ...mapped);
     emailMap.clear();
-    mapped.forEach((mail) => emailMap.set(mail.id, mail));
+    companyMap.clear();
+    companies.splice(0, companies.length);
+    mapped.forEach((mail) => {
+      emailMap.set(mail.id, mail);
+      const companyId = String(mail.companyId || "").trim();
+      const companyName = String(mail.company || "").trim();
+      if (companyId && companyId !== "unassigned" && companyName && !companyMap.has(companyId)) {
+        const company = {id: companyId, name: companyName, status: "已识别"};
+        companies.push(company);
+        companyMap.set(companyId, company);
+      }
+    });
+    const unassigned = {id: "unassigned", name: "待分类", status: "待分类", positionCount: 0, tone: "muted"};
+    companies.push(unassigned);
+    companyMap.set(unassigned.id, unassigned);
 
     const serverCompleted = new Set(
       mapped.filter((mail) => mail.isCompleted).map((mail) => mail.id),
@@ -2266,14 +2295,8 @@ async function loadMailFromApi() {
         body: JSON.stringify({email_ids: localOnlyCompleted, is_completed: true}),
       }).catch(() => {});
     }
-    if (!companies.some((company) => company.id === "unassigned")) {
-      companies.push({
-        id: "unassigned",
-        name: "待分类",
-        status: "待分类",
-        positionCount: 0,
-        tone: "muted",
-      });
+    if (!emails.some((mail) => mail.id === state.selectedMailId)) {
+      state.selectedMailId = emails[0]?.id || null;
     }
     return true;
   } catch {
@@ -2313,8 +2336,38 @@ function pipelineStageLabel(stage) {
   return "处理";
 }
 
+async function runSyncOnly() {
+  state.accountState.syncing = true;
+  state.accountState.syncMode = "sync";
+  state.accountState.error = null;
+  state.accountState.pipelineStage = "syncing";
+  state.accountState.pipelineCompleted = 0;
+  state.accountState.pipelineTotal = 0;
+  state.accountState.syncResult = null;
+  render();
+  try {
+    const data = await apiRequest("/api/sync/run", {
+      method: "POST",
+      body: JSON.stringify({start_date: state.dateStart, end_date: state.dateEnd, limit: null}),
+    });
+    state.accountState.syncing = false;
+    state.accountState.syncMode = null;
+    state.accountState.syncResult = data.result || null;
+    showToast("邮件同步完成");
+    await loadMailFromApi();
+    await loadAccountState();
+  } catch (error) {
+    state.accountState.syncing = false;
+    state.accountState.syncMode = null;
+    state.accountState.error = error.message || "邮件同步失败。";
+    render();
+    showToast(state.accountState.error, "error");
+  }
+}
+
 async function runSyncNow() {
   state.accountState.syncing = true;
+  state.accountState.syncMode = "pipeline";
   state.accountState.error = null;
   state.accountState.pipelineStage = "syncing";
   state.accountState.pipelineCompleted = 0;
@@ -2324,7 +2377,7 @@ async function runSyncNow() {
   try {
     const start = await apiRequest("/api/pipeline/run", {
       method: "POST",
-      body: JSON.stringify({days: 30, limit: 500, chunk_size: 20}),
+      body: JSON.stringify({start_date: state.dateStart, end_date: state.dateEnd, limit: null, chunk_size: 20}),
     });
     state.accountState.pipelineJobId = start.job_id;
     let job = null;
@@ -2339,6 +2392,7 @@ async function runSyncNow() {
       if (job.status === "failed") throw new Error(job.error || "同步处理流水线失败。");
     }
     state.accountState.syncing = false;
+    state.accountState.syncMode = null;
     state.accountState.pipelineJobId = null;
     state.accountState.syncResult = job?.result?.sync || null;
     showToast("同步、筛选和识别流水线已完成");
@@ -2346,6 +2400,7 @@ async function runSyncNow() {
     await loadAccountState();
   } catch (error) {
     state.accountState.syncing = false;
+    state.accountState.syncMode = null;
     state.accountState.pipelineJobId = null;
     state.accountState.error = error.message || "同步处理流水线失败。";
     render();
@@ -2550,6 +2605,11 @@ function handleClick(event) {
 
   if (action === "test-ai") {
     runAiTest();
+    return;
+  }
+
+  if (action === "sync-only") {
+    runSyncOnly();
     return;
   }
 

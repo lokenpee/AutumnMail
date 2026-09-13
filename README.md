@@ -12,7 +12,7 @@ Windows 免安装便携版：[下载 AgentMail-Windows.zip](https://github.com/l
 
 ## 功能
 
-- 通过 163 IMAP 只读同步收件箱邮件
+- 通过 163 IMAP 只读同步收件箱邮件，同步范围跟随首页日期筛选
 - 本地 SQLite 持久化
 - 使用筛选模型过滤广告、营销和无关邮件
 - 使用主模型提取邮件类别、公司、DDL、面试和主链接
