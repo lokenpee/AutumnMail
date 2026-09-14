@@ -4,13 +4,64 @@ from __future__ import annotations
 
 import imaplib
 import re
+import socket
 import ssl
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 if "ID" not in imaplib.Commands:
     imaplib.Commands["ID"] = ("AUTH",)
 
+
+_NETEASE_IMAP_FALLBACK_IPS = (
+    "117.135.214.13",
+    "117.135.214.18",
+    "220.197.33.205",
+    "220.197.33.210",
+)
+
+
+def _resolve_host_addresses(host: str, port: int) -> list[str]:
+    last_error: OSError | None = None
+    for attempt in range(3):
+        try:
+            addresses = sorted({
+                item[4][0]
+                for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+                if item[4] and item[4][0]
+            })
+            if addresses:
+                return addresses
+        except socket.gaierror as exc:
+            last_error = exc
+        if attempt < 2:
+            time.sleep(0.25 * (attempt + 1))
+    if host.strip().lower() == "imap.163.com":
+        return list(_NETEASE_IMAP_FALLBACK_IPS)
+    if last_error is not None:
+        raise last_error
+    raise socket.gaierror(f"无法解析 {host}")
+
+
+class _ResolvedAddressIMAP4SSL(imaplib.IMAP4_SSL):
+    def __init__(self, *args, resolved_addresses: list[str] | None = None, **kwargs) -> None:
+        self._resolved_addresses = list(resolved_addresses or [])
+        super().__init__(*args, **kwargs)
+
+    def _create_socket(self, timeout):
+        if not self._resolved_addresses:
+            return super()._create_socket(timeout)
+        last_error: OSError | None = None
+        for address in self._resolved_addresses:
+            try:
+                sock = socket.create_connection((address, self.port), timeout)
+                return self.ssl_context.wrap_socket(sock, server_hostname=self.host)
+            except OSError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        return super()._create_socket(timeout)
 
 
 def _imap_date(value: date) -> str:
@@ -56,11 +107,13 @@ class NeteaseImapClient:
 
     def connect(self) -> None:
         context = ssl.create_default_context()
-        connection = imaplib.IMAP4_SSL(
+        resolved_addresses = _resolve_host_addresses(self.host, self.port)
+        connection = _ResolvedAddressIMAP4SSL(
             self.host,
             self.port,
             ssl_context=context,
             timeout=self.timeout,
+            resolved_addresses=resolved_addresses,
         )
         try:
             connection.login(self.email, self.auth_code)

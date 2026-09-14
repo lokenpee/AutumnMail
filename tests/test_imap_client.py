@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import imaplib
+import socket
 import sys
 import unittest
 from datetime import date
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,7 +15,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from agent_mail.mail.imap_client import NeteaseImapClient  # noqa: E402
+from agent_mail.mail.imap_client import NeteaseImapClient, _resolve_host_addresses  # noqa: E402
 
 
 class FakeConnection:
@@ -47,6 +49,17 @@ class ImapClientTests(unittest.TestCase):
 
         self.assertEqual(["3", "5", "8"], uids)
         self.assertEqual(("SEARCH", (None, "SINCE", "01-Sep-2026", "BEFORE", "01-Oct-2026")), connection.calls[0])
+
+    def test_dns_failure_uses_netease_imap_fallback_ips(self) -> None:
+        with patch("agent_mail.mail.imap_client.socket.getaddrinfo", side_effect=socket.gaierror), patch(
+            "agent_mail.mail.imap_client.time.sleep"
+        ):
+            addresses = _resolve_host_addresses("imap.163.com", 993)
+
+        self.assertEqual(
+            ["117.135.214.13", "117.135.214.18", "220.197.33.205", "220.197.33.210"],
+            addresses,
+        )
 
 
 if __name__ == "__main__":
