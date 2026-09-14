@@ -148,7 +148,7 @@ class NeteaseImapClient:
             "name",
             "AgentMail",
             "version",
-            "0.1.0",
+            "0.1.1",
             "vendor",
             "local-agent-mail",
             "support-email",

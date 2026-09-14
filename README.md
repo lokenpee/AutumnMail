@@ -6,9 +6,9 @@
 
 ## 下载
 
-Windows 免安装便携版：[下载 AgentMail-Windows.zip](https://github.com/lokenpee/AutumnMail/releases/download/v0.1.0/AgentMail-Windows.zip)
+Windows 免安装便携版：[下载 AgentMail-Windows.zip](https://github.com/lokenpee/AutumnMail/releases/latest/download/AgentMail-Windows.zip)
 
-也可以打开 [GitHub Releases](https://github.com/lokenpee/AutumnMail/releases)，在 `v0.1.0` 的 Assets 区域下载 `AgentMail-Windows.zip`。
+也可以打开 [GitHub Releases](https://github.com/lokenpee/AutumnMail/releases)，在 Latest Release 的 Assets 区域下载 `AgentMail-Windows.zip`。
 
 ## 功能
 
