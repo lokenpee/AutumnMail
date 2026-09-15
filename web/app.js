@@ -2257,7 +2257,7 @@ function renderSettingsPage() {
 
       <article class="settings-card panel">
         <h2>关于</h2>
-        <p>当前版本：Web UI v0.1。邮箱连接、按首页日期范围同步和本地 SQLite 存储已经可用。</p>
+        <p>当前版本：v0.1.2。邮箱连接、按首页日期范围同步和本地 SQLite 存储已经可用。</p>
       </article>
     </section>
   `;
