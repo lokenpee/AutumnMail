@@ -39,8 +39,9 @@ class AIServiceError(RuntimeError):
 
 
 class AIService:
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, account_id: str | None = None) -> None:
         self.db_path = Path(db_path)
+        self.account_id = account_id
 
     def _connect(self) -> sqlite3.Connection:
         return connect(self.db_path)
@@ -613,14 +614,15 @@ class AIService:
                       AND pj.stage IN ('classified', 'deadline_extracted', 'review_required', 'ready')
                 )
             """
+        account_filter = "e.account_id = ? AND" if self.account_id else ""
         sql = f"""
             SELECT e.id, e.subject, e.from_name, e.from_email, e.received_at,
                    COALESCE(NULLIF(e.body_text, ''), e.snippet, '') AS body_text
             FROM emails e
-            WHERE {where}
+            WHERE {account_filter} {where}
             ORDER BY e.received_at DESC
         """
-        params: tuple[Any, ...] = ()
+        params: tuple[Any, ...] = (self.account_id,) if self.account_id else ()
         if limit is not None:
             sql += " LIMIT ?"
             params = (limit,)
@@ -658,16 +660,17 @@ class AIService:
                       AND pj.stage IN ('ready', 'review_required')
                 )
             """
+        account_filter = "e.account_id = ? AND" if self.account_id else ""
         sql = f"""
             SELECT e.id, e.subject, e.from_name, e.from_email, e.received_at,
                    COALESCE(NULLIF(e.body_text, ''), e.snippet, '') AS body_text,
                    c.primary_type AS current_category
             FROM emails e
             JOIN classifications c ON c.email_id = e.id
-            WHERE {condition}
+            WHERE {account_filter} {condition}
             ORDER BY e.received_at DESC
         """
-        params: tuple[Any, ...] = (*allowed,)
+        params: tuple[Any, ...] = ((self.account_id,) if self.account_id else ()) + allowed
         if limit is not None:
             sql += " LIMIT ?"
             params = (*params, limit)
@@ -676,30 +679,35 @@ class AIService:
         return [dict(row) for row in rows]
 
     def _load_email(self, email_id: str) -> dict[str, Any] | None:
+        account_filter = "AND account_id = ?" if self.account_id else ""
+        params: tuple[Any, ...] = (email_id, self.account_id) if self.account_id else (email_id,)
         with self._connect() as connection:
             row = connection.execute(
-                """
+                f"""
                 SELECT id, subject, from_name, from_email, received_at,
                        COALESCE(NULLIF(body_text, ''), snippet, '') AS body_text
                 FROM emails
-                WHERE id = ?
+                WHERE id = ? {account_filter}
                 """,
-                (email_id,),
+                params,
             ).fetchone()
         return dict(row) if row else None
 
     def _load_recent_emails(self, limit: int = 3) -> list[dict[str, Any]]:
         safe_limit = max(1, min(int(limit), 20))
+        account_filter = "WHERE account_id = ?" if self.account_id else ""
+        params: tuple[Any, ...] = (self.account_id, safe_limit) if self.account_id else (safe_limit,)
         with self._connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT id, subject, from_name, from_email, received_at,
                        COALESCE(NULLIF(body_text, ''), snippet, '') AS body_text
                 FROM emails
+                {account_filter}
                 ORDER BY received_at DESC
                 LIMIT ?
                 """,
-                (safe_limit,),
+                params,
             ).fetchall()
         return [dict(row) for row in rows]
 

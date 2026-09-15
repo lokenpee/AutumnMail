@@ -1,10 +1,11 @@
-"""Fail if staged Git files look like secrets or private runtime data."""
+"""Fail if staged or tracked Git files look like secrets/private runtime data."""
 
 from __future__ import annotations
 
 import re
 import subprocess
 import sys
+import argparse
 from pathlib import Path
 
 BLOCKED_PATHS = (
@@ -32,8 +33,26 @@ def staged_files() -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def main() -> int:
-    files = staged_files()
+def tracked_files() -> list[str]:
+    result = subprocess.run(
+        ["git", "ls-files"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--all-tracked",
+        action="store_true",
+        help="scan every Git-tracked file (recommended before building a release)",
+    )
+    args = parser.parse_args(argv)
+    files = tracked_files() if args.all_tracked else staged_files()
     problems: list[str] = []
     for name in files:
         if any(pattern.search(name) for pattern in BLOCKED_PATHS):
@@ -55,7 +74,8 @@ def main() -> int:
         print("Potential secrets detected:")
         print("\n".join(problems))
         return 1
-    print(f"No obvious secrets or private runtime files in {len(files)} staged files.")
+    scope = "tracked" if args.all_tracked else "staged"
+    print(f"No obvious secrets or private runtime files in {len(files)} {scope} files.")
     return 0
 
 

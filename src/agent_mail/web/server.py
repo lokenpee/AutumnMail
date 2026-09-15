@@ -334,7 +334,19 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
             service = MailSyncService(connection)
             account_id = service.ensure_account(email, display_name=display_name)
             service.ensure_folder(account_id, "INBOX")
+            with connection:
+                connection.execute(
+                    """
+                    UPDATE accounts
+                    SET status = 'disabled',
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id <> ? AND status = 'active'
+                    """,
+                    (account_id,),
+                )
 
+        with LOG_LOCK:
+            LOG_EVENTS.clear()
         _append_log("success", f"163 邮箱连接成功：{email}")
         self._send_json({"connected": True, "email": email, "folders": folders})
 
@@ -392,7 +404,7 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
                 analysis_totals = {"analyzed": 0, "failed": 0}
 
                 while True:
-                    screening = AIService(self.db_path).screen_batch(
+                    screening = AIService(self.db_path, account_id=sync_result["account_id"]).screen_batch(
                         limit=chunk_size,
                         mode="pending",
                         progress_callback=lambda completed, total, update=None: self._update_ai_job(
@@ -402,7 +414,7 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
                     for key in screening_totals:
                         screening_totals[key] += int(screening.get(key, 0))
 
-                    analysis = AIService(self.db_path).analyze_batch(
+                    analysis = AIService(self.db_path, account_id=sync_result["account_id"]).analyze_batch(
                         limit=None,
                         mode="pending",
                         progress_callback=lambda completed, total, update=None: self._update_ai_job(
@@ -443,11 +455,12 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
                 UPDATE accounts
                 SET status = 'disabled',
                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                WHERE id = ?
+                WHERE status = 'active'
                 """,
-                (account["id"],),
             )
             connection.commit()
+        with LOG_LOCK:
+            LOG_EVENTS.clear()
         self._send_json({"ok": True})
 
     def _prefilter_settings_state(self) -> dict[str, Any]:
@@ -633,11 +646,15 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         if not email_id or field not in {"category", "deadline", "company", "position", "eventDate"}:
             self._json_error("无效的人工纠错请求。", HTTPStatus.BAD_REQUEST)
             return
+        account = self._first_account()
+        if not account:
+            self._json_error("请先连接邮箱。", HTTPStatus.BAD_REQUEST)
+            return
 
         with self._open_db() as connection:
             email = connection.execute(
-                "SELECT id FROM emails WHERE id = ?",
-                (email_id,),
+                "SELECT id FROM emails WHERE id = ? AND account_id = ?",
+                (email_id, account["id"]),
             ).fetchone()
             if not email:
                 self._json_error("邮件不存在。", HTTPStatus.NOT_FOUND)
@@ -853,8 +870,20 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         if not email_ids:
             self._json_error("缺少邮件 ID。", HTTPStatus.BAD_REQUEST)
             return
+        account = self._first_account()
+        if not account:
+            self._json_error("请先连接邮箱。", HTTPStatus.BAD_REQUEST)
+            return
         completed = 1 if payload.get("is_completed") else 0
         with self._open_db() as connection:
+            placeholders = ",".join("?" for _ in email_ids)
+            owned_rows = connection.execute(
+                f"SELECT id FROM emails WHERE account_id = ? AND id IN ({placeholders})",
+                (account["id"], *email_ids),
+            ).fetchall()
+            if {row["id"] for row in owned_rows} != set(email_ids):
+                self._json_error("邮件不存在于当前邮箱。", HTTPStatus.NOT_FOUND)
+                return
             for email_id in email_ids:
                 connection.execute(
                     """
@@ -875,6 +904,10 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         if not email_id:
             self._json_error("缺少邮件 ID。", HTTPStatus.BAD_REQUEST)
             return
+        account = self._first_account()
+        if not account:
+            self._json_error("请先连接邮箱。", HTTPStatus.BAD_REQUEST)
+            return
         with self._open_db() as connection:
             result = connection.execute(
                 """
@@ -882,8 +915,12 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
                 SET stage = 'ready', status = 'done', last_error = NULL,
                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                 WHERE email_id = ?
+                  AND EXISTS (
+                      SELECT 1 FROM emails e
+                      WHERE e.id = processing_jobs.email_id AND e.account_id = ?
+                  )
                 """,
-                (email_id,),
+                (email_id, account["id"]),
             )
             connection.commit()
         if not result.rowcount:
@@ -903,8 +940,14 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, **result})
 
     def _test_screening_emails(self, payload: dict[str, Any]) -> None:
+        account = self._first_account()
+        if not account:
+            self._json_error("请先连接邮箱。", HTTPStatus.BAD_REQUEST)
+            return
         try:
-            result = AIService(self.db_path).test_screening_emails(limit=int(payload.get("limit", 3)))
+            result = AIService(self.db_path, account_id=account["id"]).test_screening_emails(
+                limit=int(payload.get("limit", 3))
+            )
         except Exception as exc:
             safe_error = _safe_ai_error(exc)
             _append_log("error", f"筛选测试失败：{safe_error}")
@@ -914,8 +957,14 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, **result})
 
     def _test_analysis_emails(self, payload: dict[str, Any]) -> None:
+        account = self._first_account()
+        if not account:
+            self._json_error("请先连接邮箱。", HTTPStatus.BAD_REQUEST)
+            return
         try:
-            result = AIService(self.db_path).test_analysis_emails(limit=int(payload.get("limit", 3)))
+            result = AIService(self.db_path, account_id=account["id"]).test_analysis_emails(
+                limit=int(payload.get("limit", 3))
+            )
         except Exception as exc:
             safe_error = _safe_ai_error(exc)
             _append_log("error", f"LLM 识别测试失败：{safe_error}")
@@ -925,6 +974,11 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, **result})
 
     def _run_screening_batch(self, payload: dict[str, Any]) -> None:
+        account = self._first_account()
+        if not account:
+            self._json_error("请先连接邮箱。", HTTPStatus.BAD_REQUEST)
+            return
+        account_id = account["id"]
         job_id = str(uuid.uuid4())
         raw_limit = payload.get("limit")
         limit = None if raw_limit in (None, "", 0, "all") else max(1, int(raw_limit))
@@ -934,7 +988,7 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
 
         def worker() -> None:
             try:
-                result = AIService(self.db_path).screen_batch(
+                result = AIService(self.db_path, account_id=account_id).screen_batch(
                     limit=limit,
                     mode=mode,
                     progress_callback=lambda completed, total, update=None: self._update_ai_job(
@@ -953,6 +1007,11 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, "job_id": job_id, "status": "running", "total": 0})
 
     def _run_analysis_batch(self, payload: dict[str, Any]) -> None:
+        account = self._first_account()
+        if not account:
+            self._json_error("请先连接邮箱。", HTTPStatus.BAD_REQUEST)
+            return
+        account_id = account["id"]
         job_id = str(uuid.uuid4())
         raw_limit = payload.get("limit")
         limit = None if raw_limit in (None, "", 0, "all") else max(1, int(raw_limit))
@@ -966,7 +1025,7 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
 
         def worker() -> None:
             try:
-                result = AIService(self.db_path).analyze_batch(
+                result = AIService(self.db_path, account_id=account_id).analyze_batch(
                     limit=limit,
                     mode=mode,
                     progress_callback=lambda completed, total, update=None: self._update_ai_job(
@@ -1052,9 +1111,15 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
             return {"ok": True, **job}
 
     def _run_single_analysis(self, payload: dict[str, Any]) -> None:
+        account = self._first_account()
+        if not account:
+            self._json_error("请先连接邮箱。", HTTPStatus.BAD_REQUEST)
+            return
         _append_log("info", f"开始重新识别邮件：{payload.get('email_id')}")
         try:
-            result = AIService(self.db_path).analyze_email(str(payload.get("email_id") or ""))
+            result = AIService(self.db_path, account_id=account["id"]).analyze_email(
+                str(payload.get("email_id") or "")
+            )
         except Exception as exc:
             self._json_error(_safe_ai_error(exc), HTTPStatus.BAD_REQUEST)
             return
@@ -1249,16 +1314,20 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
             connection.commit()
 
     def _load_ai_test_emails(self, limit: int) -> list[dict[str, Any]]:
+        account = self._first_account()
+        if not account:
+            return []
         with self._open_db() as connection:
             rows = connection.execute(
                 """
                 SELECT id, subject, from_name, from_email, received_at,
                        COALESCE(NULLIF(body_text, ''), snippet, '') AS body_text
                 FROM emails
+                WHERE account_id = ?
                 ORDER BY received_at DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (account["id"], limit),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -1310,6 +1379,9 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
         return [dict(row) for row in rows]
 
     def _list_emails(self, limit: int = 200) -> list[dict[str, Any]]:
+        account = self._first_account()
+        if not account:
+            return []
         with self._open_db() as connection:
             rows = connection.execute(
                 """
@@ -1329,7 +1401,7 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
                     p.title AS position,
                     d.due_date_local AS ddl,
                     ev.event_date AS event_date,
-                    pj.stage AS processing_stage,
+                    COALESCE(pj.stage, 'imported') AS processing_stage,
                     pj.last_error AS review_reason
                 FROM emails e
                 LEFT JOIN email_user_states us ON us.email_id = e.id
@@ -1351,10 +1423,11 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
                     WHERE event_type = 'interview' AND status = 'scheduled'
                     GROUP BY email_id
                 ) ev ON ev.email_id = e.id
+                WHERE e.account_id = ?
                 ORDER BY e.received_at DESC
                 LIMIT ?
                 """,
-                (max(1, min(limit, 1000)),),
+                (account["id"], max(1, min(limit, 1000))),
             ).fetchall()
 
         return [
@@ -1375,6 +1448,7 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
                 "receivedAt": row["received_at"],
                 "deadline": row["ddl"],
                 "eventDate": row["event_date"],
+                "processingStage": row["processing_stage"],
                 "needsReview": row["processing_stage"] == "review_required",
                 "reviewReason": row["review_reason"] if row["processing_stage"] == "review_required" else None,
                 "isCompleted": bool(row["is_completed"]),
@@ -1390,7 +1464,8 @@ class AgentMailHandler(SimpleHTTPRequestHandler):
                 SELECT id, provider, email, display_name, credential_ref,
                        imap_host, imap_port, smtp_host, smtp_port, status
                 FROM accounts
-                ORDER BY created_at ASC
+                WHERE status = 'active'
+                ORDER BY updated_at DESC, created_at DESC
                 LIMIT 1
                 """
             ).fetchone()

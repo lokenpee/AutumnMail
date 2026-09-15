@@ -44,6 +44,19 @@ class AIServiceCandidateTests(unittest.TestCase):
         self.assertEqual(3, len(service._load_screening_candidates(None)))
         self.assertEqual(1, len(service._load_screening_candidates(1)))
 
+    def test_screening_candidates_can_be_scoped_to_one_account(self) -> None:
+        connection = connect(self.db_path)
+        with connection:
+            connection.execute(
+                "INSERT INTO accounts(id,provider,email,credential_ref) VALUES('b','163','b@163.com','ref-b')"
+            )
+            connection.execute(
+                "INSERT INTO emails(id,account_id,canonical_key,subject,received_at) VALUES('other','b','other-key','other account','2026-09-14T00:00:00Z')"
+            )
+        connection.close()
+        service = AIService(self.db_path, account_id="a")
+        self.assertEqual({"e0", "e1", "e2"}, {row["id"] for row in service._load_screening_candidates(None)})
+
     def test_analysis_candidates_exclude_other_and_unclassified(self) -> None:
         connection = connect(self.db_path)
         with connection:

@@ -35,7 +35,8 @@ def main() -> int:
 
     root = app_root()
     db_path = args.db or (root / "data" / "agent_mail.db")
-    url = f"http://{args.host}:{args.port}/?v=20260913t#/home"
+    # Bump the cache-busting query whenever the bundled Web UI changes.
+    url = f"http://{args.host}:{args.port}/?v=20260915b#/home"
 
     if port_open(args.host, args.port):
         if not args.no_browser:

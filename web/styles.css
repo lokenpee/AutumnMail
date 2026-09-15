@@ -504,6 +504,24 @@ select:focus-visible,
   background: rgba(79, 70, 229, 0.12);
 }
 
+.filter-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.filter-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--brand);
+}
+
 .mail-workspace {
   display: grid;
   grid-template-columns: minmax(460px, 0.52fr) minmax(460px, 0.48fr);

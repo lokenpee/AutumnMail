@@ -21,6 +21,9 @@ Windows 免安装便携版：[下载 AgentMail-Windows.zip](https://github.com/l
 - 完成状态、DDL 修正和人工复核
 - 本地 Agent 日志
 - API Key 存入 Windows Credential Manager，不写入源码和数据库
+- 多邮箱数据按账号隔离；切换邮箱后只显示和处理当前账号的邮件、完成状态及 AI 结果
+
+安全说明：release 包和 GitHub 源码压缩包不包含任何账号、邮件或 API Key。Key 显示“已保存”表示当前 Windows 用户的凭据管理器中已有配置（例如之前运行过开发版）；如需移除，可在设置页点击“清除已保存 Key”。只有在启用 AI 处理时，邮件内容才会发送到你配置的模型 Base URL。
 
 ## 环境要求
 
@@ -116,6 +119,12 @@ python scripts\check_secrets.py
 ```
 
 该命令只扫描 Git 暂存区，发现数据库、日志、私钥、常见 API Key 等风险文件时会返回失败。
+
+发布 release 前可扫描全部 Git 跟踪文件（GitHub 源码压缩包的内容来源）：
+
+```powershell
+python scripts\check_secrets.py --all-tracked
+```
 
 ## 目录
 

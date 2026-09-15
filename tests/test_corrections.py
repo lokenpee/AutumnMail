@@ -36,6 +36,9 @@ class DummyHandler:
     def _json_error(self, message, status=None) -> None:
         raise AssertionError(message)
 
+    def _first_account(self):
+        return AgentMailHandler._first_account(self)
+
 
 class CorrectionTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -74,6 +77,11 @@ class CorrectionTests(unittest.TestCase):
         self.assertIsNotNone(rows[0]["companyId"])
         self.assertEqual("字节跳动", rows[0]["company"])
         self.assertIn("bodyHtml", rows[0])
+
+    def test_email_list_marks_unprocessed_mail_as_imported(self) -> None:
+        rows = AgentMailHandler._list_emails(self.handler)
+        self.assertEqual("unclassified", rows[0]["category"])
+        self.assertEqual("imported", rows[0]["processingStage"])
 
     def test_email_review_state_is_exposed_and_can_be_cleared(self) -> None:
         connection = connect(self.db_path)

@@ -69,6 +69,7 @@ class MailSyncService:
 
     def ensure_account(self, email: str, display_name: str | None = None) -> str:
         account_id = _account_id(email)
+        normalized_email = email.strip().lower()
         credential_ref = credential_target(email)
         with self.connection:
             self.connection.execute(
@@ -82,9 +83,15 @@ class MailSyncService:
                     status = 'active',
                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                 """,
-                (account_id, email.strip().lower(), display_name, credential_ref),
+                (account_id, normalized_email, display_name, credential_ref),
             )
-        return account_id
+        row = self.connection.execute(
+            "SELECT id FROM accounts WHERE provider = '163' AND email = ?",
+            (normalized_email,),
+        ).fetchone()
+        if not row:
+            raise RuntimeError("邮箱账号保存失败。")
+        return str(row["id"])
 
     def ensure_folder(self, account_id: str, name: str = "INBOX") -> str:
         folder_id = _folder_id(account_id, name)

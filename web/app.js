@@ -7,6 +7,7 @@ const emails = [];
 const companyMap = new Map();
 const emailMap = new Map();
 const completedStorageKey = "agent-mail.completed";
+const excludeCompletedStorageKey = "agent-mail.excludeCompleted";
 const dateRangeStorageKey = "agent-mail.dateRange";
 const providerPresets = {
   deepseek: {label: "DeepSeek", baseUrl: "https://api.deepseek.com"},
@@ -49,6 +50,14 @@ function loadCompleted() {
   }
 }
 
+function loadExcludeCompleted() {
+  try {
+    return window.localStorage.getItem(excludeCompletedStorageKey) === "true";
+  } catch {
+    return false;
+  }
+}
+
 function defaultDateRange() {
   const now = new Date();
   return {
@@ -74,6 +83,7 @@ const state = {
   selectedCompany: "all",
   search: "",
   category: "all",
+  excludeCompleted: loadExcludeCompleted(),
   selectedMailId: null,
   mailListScrollTop: 0,
   calendarMonth: currentMonthStart(),
@@ -423,6 +433,9 @@ function reviewPill(email) {
 }
 
 function isExcludedFromJobSearch(email) {
+  // Newly synced mail is still unclassified. Keep it visible until screening
+  // has had a chance to decide whether it belongs to the job-search inbox.
+  if (email.category === "unclassified" && email.processingStage === "imported") return false;
   return Boolean(email.isOther || email.companyIsOther || ["other", "unclassified"].includes(email.category));
 }
 
@@ -432,6 +445,7 @@ function isVisibleByScope(email) {
 
 function mailMatchesFilters(email) {
   if (!isDateInRange(email.receivedAt)) return false;
+  if (state.excludeCompleted && isCompleted(email.id)) return false;
   if (!isVisibleByScope(email)) return false;
   if (state.selectedCompany !== "all" && email.companyId !== state.selectedCompany) return false;
   if (state.category !== "all" && email.category !== state.category) return false;
@@ -769,6 +783,10 @@ function renderMailPage() {
           data-action="set-scope" data-scope="job">只看秋招</button>
         <button class="filter-chip ${state.scope === "all" ? "is-active" : ""}"
           data-action="set-scope" data-scope="all">全部邮件</button>
+        <label class="filter-check">
+          <input id="exclude-completed" type="checkbox" ${state.excludeCompleted ? "checked" : ""} />
+          <span>剔除已完成邮件</span>
+        </label>
         <span class="toolbar-label">公司</span>
         ${renderCompanyQuickFilters()}
         <input class="input" id="company-search" type="search" value="${escapeHtml(state.search)}"
@@ -1242,6 +1260,28 @@ async function submitScreeningForm(event) {
   }
 }
 
+async function clearSavedApiKey(kind) {
+  const isAi = kind === "ai";
+  const targetState = isAi ? state.aiState : state.screeningState;
+  const endpoint = isAi ? "/api/ai/settings" : "/api/ai/screening/settings";
+  if (!targetState.apiKeyConfigured || !window.confirm("确定清除本机保存的 API Key 吗？")) return;
+  targetState.saving = true;
+  render();
+  try {
+    const data = await apiRequest(endpoint, {method: "POST", body: JSON.stringify({clear_api_key: true})});
+    targetState.saving = false;
+    targetState.apiKeyConfigured = Boolean(data.api_key_configured ?? data.apiKeyConfigured);
+    targetState.draftApiKey = "";
+    targetState.dirty = false;
+    showToast("已清除本机保存的 API Key");
+  } catch (error) {
+    targetState.saving = false;
+    targetState.error = error.message || "清除 API Key 失败。";
+    showToast(targetState.error, "error");
+  }
+  render();
+}
+
 function renderScreeningSettingsCard() {
   const screening = state.screeningState;
   const config = screening.config;
@@ -1285,7 +1325,8 @@ function renderScreeningSettingsCard() {
         </label>
         <label class="form-field">
           <span>筛选 API Key</span>
-          <input class="input" id="screening-api-key" type="password" value="${escapeHtml(screening.draftApiKey || "")}" placeholder="${screening.apiKeyConfigured ? "••••••••••••••••  已保存，输入新 Key 可替换" : "输入筛选模型 API Key"}" autocomplete="new-password" />
+          <input class="input" id="screening-api-key" type="password" value="${escapeHtml(screening.draftApiKey || "")}" placeholder="${screening.apiKeyConfigured ? "本机凭据管理器已有 Key；输入新 Key 可替换" : "输入筛选模型 API Key"}" autocomplete="new-password" />
+          ${screening.apiKeyConfigured ? `<small class="form-hint">此状态来自当前 Windows 用户的凭据管理器，不代表安装包或源码中包含 Key。</small>` : ""}
         </label>
         <div class="form-grid-4">
           <label class="form-field"><span>正文最大字符</span><input class="input" id="screening-max-chars" type="number" min="100" max="20000" value="${Number(config.max_chars || 2000)}" /></label>
@@ -1297,6 +1338,7 @@ function renderScreeningSettingsCard() {
           <button id="screening-save-button" class="button primary" type="submit" ${screening.saving || (!screening.dirty && screening.apiKeyConfigured) ? "disabled" : ""}>
             ${screening.saving ? "正在保存..." : (!screening.dirty && screening.apiKeyConfigured ? "已保存" : "保存筛选配置")}
           </button>
+          ${screening.apiKeyConfigured ? `<button class="button" type="button" data-action="clear-screening-key" ${screening.saving ? "disabled" : ""}>清除已保存 Key</button>` : ""}
           <button class="button" type="button" data-action="test-screening-connection" ${screening.testing ? "disabled" : ""}>
             ${screening.testing ? "测试中..." : "测试模型"}
           </button>
@@ -1688,7 +1730,8 @@ async function toggleEmailCompleted(mailId) {
   if (nextCompleted) state.completed.add(email.id);
   else state.completed.delete(email.id);
   saveCompleted();
-  applyMailUpdate({email_id: email.id, patch: {}});
+  if (state.excludeCompleted) render();
+  else applyMailUpdate({email_id: email.id, patch: {}});
   showToast(nextCompleted ? "已标记完成" : "已取消完成", "success");
   try {
     await apiRequest("/api/emails/complete", {
@@ -1699,7 +1742,8 @@ async function toggleEmailCompleted(mailId) {
     if (nextCompleted) state.completed.delete(email.id);
     else state.completed.add(email.id);
     saveCompleted();
-    applyMailUpdate({email_id: email.id, patch: {}});
+    if (state.excludeCompleted) render();
+    else applyMailUpdate({email_id: email.id, patch: {}});
     showToast(error.message || "完成状态保存失败。", "error");
   }
 }
@@ -1837,7 +1881,8 @@ function renderAiSettingsCard() {
         </label>
         <label class="form-field">
           <span>API Key</span>
-          <input class="input" id="ai-api-key" type="password" value="${escapeHtml(ai.draftApiKey || "")}" placeholder="${ai.apiKeyConfigured ? "••••••••••••••••  已保存，输入新 Key 可替换" : "输入主模型 API Key"}" autocomplete="new-password" />
+          <input class="input" id="ai-api-key" type="password" value="${escapeHtml(ai.draftApiKey || "")}" placeholder="${ai.apiKeyConfigured ? "本机凭据管理器已有 Key；输入新 Key 可替换" : "输入主模型 API Key"}" autocomplete="new-password" />
+          ${ai.apiKeyConfigured ? `<small class="form-hint">此状态来自当前 Windows 用户的凭据管理器，不代表安装包或源码中包含 Key。</small>` : ""}
         </label>
         <div class="form-grid-4">
           <label class="form-field">
@@ -1861,6 +1906,7 @@ function renderAiSettingsCard() {
           <button id="ai-save-button" class="button primary" type="submit" ${ai.saving || (!ai.dirty && ai.apiKeyConfigured) ? "disabled" : ""}>
             ${ai.saving ? "正在保存..." : (!ai.dirty && ai.apiKeyConfigured ? "已保存" : "保存 AI 配置")}
           </button>
+          ${ai.apiKeyConfigured ? `<button class="button" type="button" data-action="clear-ai-key" ${ai.saving ? "disabled" : ""}>清除已保存 Key</button>` : ""}
           <button class="button" type="button" data-action="test-ai-connection" ${ai.testing ? "disabled" : ""}>
             ${ai.testing ? "测试中..." : "测试模型"}
           </button>
@@ -2319,6 +2365,8 @@ async function submitAccountForm(event) {
       body: JSON.stringify({email, auth_code: authCode, display_name: displayName}),
     });
     state.accountState.connecting = false;
+    state.logState.events = [];
+    state.logState.cursor = 0;
     showToast("163 邮箱连接成功");
     await loadAccountState();
   } catch (error) {
@@ -2422,6 +2470,14 @@ async function disconnectAccount() {
       syncing: false,
       syncResult: null,
     };
+    emails.splice(0, emails.length);
+    emailMap.clear();
+    companyMap.clear();
+    companies.splice(0, companies.length);
+    state.selectedMailId = null;
+    state.selectedCompany = "all";
+    state.logState.events = [];
+    state.logState.cursor = 0;
     showToast("邮箱已断开");
     render();
   } catch (error) {
@@ -2563,6 +2619,16 @@ function handleClick(event) {
     return;
   }
 
+  if (action === "clear-ai-key") {
+    clearSavedApiKey("ai");
+    return;
+  }
+
+  if (action === "clear-screening-key") {
+    clearSavedApiKey("screening");
+    return;
+  }
+
   if (action === "pause-screening") {
     pauseBatch("screening");
     return;
@@ -2672,6 +2738,14 @@ function handleChange(event) {
   }
   if (target.id === "category-filter") {
     state.category = target.value;
+    render();
+    return;
+  }
+  if (target.id === "exclude-completed") {
+    state.excludeCompleted = target.checked;
+    try {
+      window.localStorage.setItem(excludeCompletedStorageKey, String(state.excludeCompleted));
+    } catch {}
     render();
     return;
   }
@@ -2840,9 +2914,13 @@ window.addEventListener("hashchange", () => {
 });
 
 window.addEventListener("storage", (event) => {
-  if (event.key !== completedStorageKey) return;
-  state.completed = loadCompleted();
-  render();
+  if (event.key === completedStorageKey) {
+    state.completed = loadCompleted();
+    render();
+  } else if (event.key === excludeCompletedStorageKey) {
+    state.excludeCompleted = loadExcludeCompleted();
+    render();
+  }
 });
 
 init();
